@@ -1,0 +1,246 @@
+#!/usr/bin/env bash
+
+# ghradl - Github Release Asset Downloader
+
+# Depends on jq https://stedolan.github.io/jq/
+
+usage() {
+  cat >&2 << EOH
+ghradl - Github Release Asset Downloader
+
+Usage:
+  ghradl [-r <tag> | -a <assets> | -o <dir> | -t <token> | -f] <user> <repository>
+  ghradl -l [(-A | -r <tag>) | -a <assets> | -t <token> | -J] <user> <repository>
+  ghradl -A [-t <token> | -J] <user> <repository>
+  ghradl -h
+
+Options:
+  -h        Prints this message.
+  -l        List release assets.
+  -A        List all releases.
+  -J        Print JSON when listing releases or assets [default: false].
+  -r TAG    Get a release by tag name [default: the latest release].
+  -a REGEX  Get all assets matching asset name regexp [default: all release assets].
+  -o DIR    Directory to download assets to [default: current working directory].
+  -t TOKEN  Github API token [default: no token] (https://github.com/settings/tokens).
+  -f        Overwrite any existing downloaded assets [default: false].
+  -v        Verbose output [default: false].
+EOH
+}
+
+echoError() {
+  echo "$@" >&2
+}
+
+repeatedOpt() {
+  usage
+  echoError
+  echoError "Please provide the -$1 option only once."
+  exit 1
+}
+
+allOrTag() {
+  usage
+  echoError
+  echoError "Getting a release by tag '-r $1' and listing releases with '-A' cannot be done together."
+  exit 1
+}
+
+jqFilter() {
+  echo "$1" | jq --raw-output "$2"
+}
+
+listAssets=false
+listReleases=false
+printJson=false
+forceDownload=false
+verbose=false
+
+while getopts ":hlAJa:r:o:t:fv" opt; do
+  case $opt in
+    l)
+      if [ "$listAssets" = true ]; then repeatedOpt "l"; fi
+      listAssets=true
+      ;;
+    A)
+      if [ "$listReleases" = true ]; then repeatedOpt "A"; fi
+      if [ -n "$tag" ]; then allOrTag "$tag"; fi
+      listReleases=true
+      ;;
+    J)
+      if [ "$printJson" = true ]; then repeatedOpt "J"; fi
+      printJson=true
+      ;;
+    r)
+      if [ -n "$tag" ]; then repeatedOpt "r"; fi
+      if [ "$listReleases" = true ]; then allOrTag "$OPTARG"; fi
+      tag="$OPTARG"
+      ;;
+    a)
+      if [ -n "$assets" ]; then repeatedOpt "a"; fi
+      assets="$OPTARG"
+      ;;
+    o)
+      if [ -n "$outputDir" ]; then repeatedOpt "o"; fi
+      outputDir="$OPTARG"
+      ;;
+    t)
+      if [ -n "$token" ]; then repeatedOpt "t"; fi
+      token="$OPTARG"
+      ;;
+    f)
+      if [ "$forceDownload" = true ]; then repeatedOpt "f"; fi
+      forceDownload=true
+      ;;
+    v)
+      if [ "$verbose" = true ]; then repeatedOpt "v"; fi
+      verbose=true
+      ;;
+    h)
+      usage
+      exit 0
+      ;;
+    :)
+      usage
+      echoError
+      echoError "Option -$OPTARG requires an argument."
+      exit 1
+      ;;
+    \?)
+      usage
+      echoError
+      echoError "Invalid option -$OPTARG."
+      exit 1
+      ;;
+  esac
+done
+
+if [[ "$listAssets" = true || "$listReleases" = true ]]
+then
+  if [ -n "$outputDir" ]
+  then
+    usage
+    echoError
+    echoError "The output directory option '-o $outputDir' is not applicable when listing releases or assets."
+    exit 1
+  fi
+
+  if [ "$forceDownload" = true ]
+  then
+    usage
+    echoError
+    echoError "The overwrite downloads option '-f' is not applicable when listing releases or assets."
+    exit 1
+  fi
+else
+  # We are neither listing assets or releases
+  if [ "$printJson" = true ]
+  then
+    usage
+    echoError
+    echoError "The print JSON option '-J' is only applicable when listing releases or assets."
+    exit 1
+  fi
+fi
+
+if [[ "$listReleases" = true && "$listAssets" = false ]]
+then
+  if [ -n "$assets" ]
+  then
+    usage
+    echoError
+    echoError "The assets option '-a $assets' is not applicable when listing releases without listing assets."
+    exit 1
+  fi
+fi
+
+shift "$((OPTIND -1))"
+
+user="$1"
+repo="$2"
+
+if [ -z "$user" ]
+then
+  usage
+  echoError
+  echoError "Please provide a user."
+  exit 1
+fi
+
+if [ -z "$repo" ]
+then
+  usage
+  echoError
+  echoError "Please provide a repository."
+  exit 1
+fi
+
+allAssets=".*"
+assets="${assets="$allAssets"}"
+auth="${token+"?access_token=$token"}"
+
+if [ "$listReleases" = false ]
+then
+  release="${tag+"/tags/$tag"}"
+  release="${release:=/latest}"
+fi
+
+if [ "$verbose" = true ]
+then
+  echoError "User: $1"
+  echoError "Repo: $2"
+  echoError "List assets: $listAssets"
+  echoError "List releases: $listReleases"
+  echoError "Tag: $tag"
+  echoError "Assets: $assets"
+  echoError "Output dir: $outputDir"
+  echoError "Token: $token"
+  echoError "Overwrite assets: $forceDownload"
+  echoError "Release: $release"
+  echoError
+fi
+
+releasesApi="https://api.github.com/repos/$user/$repo/releases"
+releasesApiResponse="`curl --silent "$releasesApi$release$auth"`"
+
+if [ -z "$releasesApiResponse" ]
+then
+  echoError "Could not connect to Github to get releases for user and repository '$user/$repo'. Are you connected to the internet?"
+  exit 1
+fi
+
+releaseApiErrorMessage="`jqFilter "$releasesApiResponse" ".message"`"
+
+if [ "$releaseApiErrorMessage" != "null" ]
+then
+  echoError "Could not get releases for user and repository '$user/$repo'."
+  echoError
+  echoError "Got error '$releaseApiErrorMessage'."
+  exit 1
+fi
+
+releaseAssetsFilter() {
+  echo "{name: .name, tag_name: .tag_name, assets: [.assets[] | select(.name | test(\"$1\")) |  {name: .name, url: .url}]}"
+}
+
+releasesJson="`jqFilter "$releasesApiResponse" "$(releaseAssetsFilter "$allAssets")"`"
+filteredAssetsReleasesJson="`jqFilter "$releasesJson" "$(releaseAssetsFilter "$assets")"`"
+
+if [[ "$listAssets" = true || "$listReleases" = true ]]
+then
+  if [ "$printJson" = true ]
+  then
+    jqFilter "$filteredAssetsReleasesJson" "{name: .name, tag: .tag_name, assets: .assets}"
+  else
+    name="`jqFilter "$filteredAssetsReleasesJson" ".name"`"
+    tag="`jqFilter "$filteredAssetsReleasesJson" ".tag_name"`"
+    filteredAssets="`jqFilter "$filteredAssetsReleasesJson" ".assets[] | .name"`"
+
+    echo "Release: $name"
+    echo "Tag: $tag"
+    echo "Assets:"
+    echo "$filteredAssets"
+  fi
+
+  exit 0
+fi
