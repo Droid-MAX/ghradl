@@ -232,7 +232,7 @@ then
 fi
 
 releaseAssetsFilter() {
-  filter="{name: .name, tag: .tag_name, assets: [.assets[] | select(.name | test(\"$1\")) |  {name: .name, url: .url}]}"
+  filter="{name: .name, tag: .tag_name, assets: [.assets[] | select(.name | test(\"$1\")) |  {name: .name, url: .url, download: .browser_download_url}]}"
 
   if [ "$listReleases" = true ]
   then
@@ -242,40 +242,39 @@ releaseAssetsFilter() {
   fi
 }
 
-printJsonFilter() {
-  if [ "$listAssets" = true ]
-  then
-    echo "."
-  else
-    echo "[.[] | {tag: .tag, name: .name}]"
-  fi
-}
-
 releaseAssetsJson="`jqFilter "$releasesApiResponse" "$(releaseAssetsFilter "$assets")"`"
 
 if [ "$printJson" = true ]
 then
+  printJsonFilter() {
+    if [ "$listAssets" = true ]
+    then
+      echo "."
+    else
+      echo "[.[] | {tag: .tag, name: .name}]"
+    fi
+  }
+
   jqFilter "$releaseAssetsJson" "`printJsonFilter`"
   exit 0
 fi
 
-if [ "$listReleases" = true ]
+if [[ "$listAssets" = true || "$listReleases" = true ]]
 then
-  listReleasesFilter="[]"
-fi
-
-while IFS= read -r
-do
-  releaseName="`jqFilter "$REPLY" ".name"`"
-  releaseTag="`jqFilter "$REPLY" ".tag"`"
-
-  if [[ "$listAssets" = true || "$listReleases" = true ]]
+  if [ "$listReleases" = true ]
   then
+    listReleasesFilter="[]"
+  fi
+
+  while IFS= read -r
+  do
+    releaseName="`jqFilter "$REPLY" ".name"`"
+    releaseTag="`jqFilter "$REPLY" ".tag"`"
+    assetNames="`jqFilter "$REPLY" ".assets[].name"`"
+
     echo
     echo "Release: $releaseName"
     echo "Tag: $releaseTag"
-
-    assetNames="`jqFilter "$REPLY" ".assets[].name"`"
 
     if [ "$listAssets" = true ]
     then
@@ -292,29 +291,43 @@ do
         echo "$assetNames"
       fi
     fi
-  else
-    while IFS= read -r
-    do
-      assetName="`jqFilter "$REPLY" ".name"`"
-      assetUrl="`jqFilter "$REPLY" ".url"`"
+  done < <(jqFilterCompact "$releaseAssetsJson" ".$listReleasesFilter")
+else
+  releaseName="`jqFilter "$releaseAssetsJson" ".name"`"
+  releaseTag="`jqFilter "$releaseAssetsJson" ".tag"`"
 
-      output="$outputDir/$assetName"
+  assetsJson() {
+    jqFilterCompact "$releaseAssetsJson" ".assets[]"
+  }
 
-      echoVerbose
-      echoVerbose "Downloading $assetName to $outputDir..."
-
-      if [[ ! -e "$output" || "$forceDownload" = true ]]
-      then
-        # --location is needed to handle 302 redirects
-        # See https://developer.github.com/v3/repos/releases/#get-a-single-release-asset
-
-        curl --silent --location --create-dirs --output "$output" \
-          -H 'Accept: application/octet-stream' "$assetUrl$auth"
-
-        echoVerbose "Finished $assetName."
-      else
-        echoVerbose "Already exists. Moving on."
-      fi
-    done < <(jqFilterCompact "$REPLY" ".assets[]")
+  if [ -z "`assetsJson`" ]
+  then
+    echoError
+    echoError "No assets match '$assetRegex' for release $releaseTag."
+    exit 1
   fi
-done < <(jqFilterCompact "$releaseAssetsJson" ".$listReleasesFilter")
+
+  while IFS= read -r
+  do
+    assetName="`jqFilter "$REPLY" ".name"`"
+    assetUrl="`jqFilter "$REPLY" ".url"`"
+
+    output="$outputDir/$assetName"
+
+    echoVerbose
+    echoVerbose "Downloading $assetName to $outputDir..."
+
+    if [[ ! -e "$output" || "$forceDownload" = true ]]
+    then
+      # --location is needed to handle 302 redirects
+      # See https://developer.github.com/v3/repos/releases/#get-a-single-release-asset
+
+      curl --silent --location --create-dirs --output "$output" \
+        -H 'Accept: application/octet-stream' "$assetUrl$auth"
+
+      echoVerbose "Finished $assetName."
+    else
+      echoVerbose "Already exists. Moving on."
+    fi
+  done < <(assetsJson)
+fi
