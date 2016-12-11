@@ -47,7 +47,14 @@ allOrTag() {
 }
 
 jqFilter() {
-  echo "$1" | jq --raw-output "$2"
+  json="$1"
+  filter="$2"
+  shift 2
+  echo "$json" | jq --raw-output $@ "$filter"
+}
+
+jqFilterCompact() {
+  jqFilter "$1" "$2" -c
 }
 
 listAssets=false
@@ -77,8 +84,8 @@ while getopts ":hlAJa:r:o:t:fv" opt; do
       tag="$OPTARG"
       ;;
     a)
-      if [ -n "$assets" ]; then repeatedOpt "a"; fi
-      assets="$OPTARG"
+      if [ -n "$assetRegex" ]; then repeatedOpt "a"; fi
+      assetRegex="$OPTARG"
       ;;
     o)
       if [ -n "$outputDir" ]; then repeatedOpt "o"; fi
@@ -145,11 +152,11 @@ fi
 
 if [[ "$listReleases" = true && "$listAssets" = false ]]
 then
-  if [ -n "$assets" ]
+  if [ -n "$assetRegex" ]
   then
     usage
     echoError
-    echoError "The assets option '-a $assets' is not applicable when listing releases without listing assets."
+    echoError "The assets option '-a $assetRegex' is not applicable when listing releases without listing assets with '-l'."
     exit 1
   fi
 fi
@@ -176,7 +183,7 @@ then
 fi
 
 allAssets=".*"
-assets="${assets="$allAssets"}"
+assets="${assetRegex="$allAssets"}"
 auth="${token+"?access_token=$token"}"
 
 if [ "$listReleases" = false ]
@@ -209,9 +216,9 @@ then
   exit 1
 fi
 
-releaseApiErrorMessage="`jqFilter "$releasesApiResponse" ".message"`"
+releaseApiErrorMessage="`jqFilter "$releasesApiResponse" ".message?"`"
 
-if [ "$releaseApiErrorMessage" != "null" ]
+if [[ -n "$releaseApiErrorMessage" && "$releaseApiErrorMessage" != "null" ]]
 then
   echoError "Could not get releases for user and repository '$user/$repo'."
   echoError
@@ -220,26 +227,64 @@ then
 fi
 
 releaseAssetsFilter() {
-  echo "{name: .name, tag_name: .tag_name, assets: [.assets[] | select(.name | test(\"$1\")) |  {name: .name, url: .url}]}"
+  filter="{name: .name, tag: .tag_name, assets: [.assets[] | select(.name | test(\"$1\")) |  {name: .name, url: .url}]}"
+
+  if [ "$listReleases" = true ]
+  then
+    echo "[.[] | $filter]"
+  else
+    echo "$filter"
+  fi
 }
 
-releasesJson="`jqFilter "$releasesApiResponse" "$(releaseAssetsFilter "$allAssets")"`"
-filteredAssetsReleasesJson="`jqFilter "$releasesJson" "$(releaseAssetsFilter "$assets")"`"
+printJsonFilter() {
+  if [ "$listAssets" = true ]
+  then
+    echo "."
+  else
+    echo "[.[] | {tag: .tag, name: .name}]"
+  fi
+}
+
+releasesJson="`jqFilter "$releasesApiResponse" "$(releaseAssetsFilter "$assets")"`"
 
 if [[ "$listAssets" = true || "$listReleases" = true ]]
 then
   if [ "$printJson" = true ]
   then
-    jqFilter "$filteredAssetsReleasesJson" "{name: .name, tag: .tag_name, assets: .assets}"
+    jqFilter "$releasesJson" "`printJsonFilter`"
   else
-    name="`jqFilter "$filteredAssetsReleasesJson" ".name"`"
-    tag="`jqFilter "$filteredAssetsReleasesJson" ".tag_name"`"
-    filteredAssets="`jqFilter "$filteredAssetsReleasesJson" ".assets[] | .name"`"
+    if [ "$listReleases" = true ]
+    then
+      printArrayFilter="[]"
+    fi
 
-    echo "Release: $name"
-    echo "Tag: $tag"
-    echo "Assets:"
-    echo "$filteredAssets"
+    while IFS= read -r
+    do
+      name="`jqFilter "$REPLY" ".name"`"
+      tag="`jqFilter "$REPLY" ".tag"`"
+      filteredAssets="`jqFilter "$REPLY" ".assets[].name"`"
+
+      echo
+      echo "Release: $name"
+      echo "Tag: $tag"
+
+      if [ "$listAssets" = true ]
+      then
+        if [ -z "$filteredAssets" ]
+        then
+          if [ -n "$assetRegex" ]
+          then
+            echo "Assets: (no assets match '$assetRegex')"
+          else
+            echo "Assets: (this release has no assets)"
+          fi
+        else
+          echo "Assets:"
+          echo "$filteredAssets"
+        fi
+      fi
+    done < <(jqFilterCompact "$releasesJson" ".$printArrayFilter")
   fi
 
   exit 0
