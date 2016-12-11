@@ -32,6 +32,13 @@ echoError() {
   echo "$@" >&2
 }
 
+echoVerbose() {
+  if [ "$verbose" = true ]
+  then
+    echoError "$@"
+  fi
+}
+
 repeatedOpt() {
   usage
   echoError
@@ -184,6 +191,8 @@ fi
 
 allAssets=".*"
 assets="${assetRegex="$allAssets"}"
+defaultOutputDir="."
+outputDir="${outputDir="$defaultOutputDir"}"
 auth="${token+"?access_token=$token"}"
 
 if [ "$listReleases" = false ]
@@ -192,20 +201,16 @@ then
   release="${release:=/latest}"
 fi
 
-if [ "$verbose" = true ]
-then
-  echoError "User: $1"
-  echoError "Repo: $2"
-  echoError "List assets: $listAssets"
-  echoError "List releases: $listReleases"
-  echoError "Tag: $tag"
-  echoError "Assets: $assets"
-  echoError "Output dir: $outputDir"
-  echoError "Token: $token"
-  echoError "Overwrite assets: $forceDownload"
-  echoError "Release: $release"
-  echoError
-fi
+echoVerbose "User: $1"
+echoVerbose "Repo: $2"
+echoVerbose "List assets: $listAssets"
+echoVerbose "List releases: $listReleases"
+echoVerbose "Tag: $tag"
+echoVerbose "Assets: $assets"
+echoVerbose "Output dir: $outputDir"
+echoVerbose "Token: $token"
+echoVerbose "Overwrite assets: $forceDownload"
+echoVerbose "Release: $release"
 
 releasesApi="https://api.github.com/repos/$user/$repo/releases"
 releasesApiResponse="`curl --silent "$releasesApi$release$auth"`"
@@ -246,46 +251,70 @@ printJsonFilter() {
   fi
 }
 
-releasesJson="`jqFilter "$releasesApiResponse" "$(releaseAssetsFilter "$assets")"`"
+releaseAssetsJson="`jqFilter "$releasesApiResponse" "$(releaseAssetsFilter "$assets")"`"
 
-if [[ "$listAssets" = true || "$listReleases" = true ]]
+if [ "$printJson" = true ]
 then
-  if [ "$printJson" = true ]
-  then
-    jqFilter "$releasesJson" "`printJsonFilter`"
-  else
-    if [ "$listReleases" = true ]
-    then
-      printArrayFilter="[]"
-    fi
-
-    while IFS= read -r
-    do
-      name="`jqFilter "$REPLY" ".name"`"
-      tag="`jqFilter "$REPLY" ".tag"`"
-      filteredAssets="`jqFilter "$REPLY" ".assets[].name"`"
-
-      echo
-      echo "Release: $name"
-      echo "Tag: $tag"
-
-      if [ "$listAssets" = true ]
-      then
-        if [ -z "$filteredAssets" ]
-        then
-          if [ -n "$assetRegex" ]
-          then
-            echo "Assets: (no assets match '$assetRegex')"
-          else
-            echo "Assets: (this release has no assets)"
-          fi
-        else
-          echo "Assets:"
-          echo "$filteredAssets"
-        fi
-      fi
-    done < <(jqFilterCompact "$releasesJson" ".$printArrayFilter")
-  fi
-
+  jqFilter "$releaseAssetsJson" "`printJsonFilter`"
   exit 0
 fi
+
+if [ "$listReleases" = true ]
+then
+  listReleasesFilter="[]"
+fi
+
+while IFS= read -r
+do
+  releaseName="`jqFilter "$REPLY" ".name"`"
+  releaseTag="`jqFilter "$REPLY" ".tag"`"
+
+  if [[ "$listAssets" = true || "$listReleases" = true ]]
+  then
+    echo
+    echo "Release: $releaseName"
+    echo "Tag: $releaseTag"
+
+    assetNames="`jqFilter "$REPLY" ".assets[].name"`"
+
+    if [ "$listAssets" = true ]
+    then
+      if [ -z "$assetNames" ]
+      then
+        if [ -n "$assetRegex" ]
+        then
+          echo "Assets: (no assets match '$assetRegex')"
+        else
+          echo "Assets: (this release has no assets)"
+        fi
+      else
+        echo "Assets:"
+        echo "$assetNames"
+      fi
+    fi
+  else
+    while IFS= read -r
+    do
+      assetName="`jqFilter "$REPLY" ".name"`"
+      assetUrl="`jqFilter "$REPLY" ".url"`"
+
+      output="$outputDir/$assetName"
+
+      echoVerbose
+      echoVerbose "Downloading $assetName to $outputDir..."
+
+      if [[ ! -e "$output" || "$forceDownload" = true ]]
+      then
+        # --location is needed to handle 302 redirects
+        # See https://developer.github.com/v3/repos/releases/#get-a-single-release-asset
+
+        curl --silent --location --create-dirs --output "$output" \
+          -H 'Accept: application/octet-stream' "$assetUrl$auth"
+
+        echoVerbose "Finished $assetName."
+      else
+        echoVerbose "Already exists. Moving on."
+      fi
+    done < <(jqFilterCompact "$REPLY" ".assets[]")
+  fi
+done < <(jqFilterCompact "$releaseAssetsJson" ".$listReleasesFilter")
