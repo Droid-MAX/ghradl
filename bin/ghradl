@@ -2,7 +2,7 @@
 
 # ghradl - Github Release Asset Downloader
 
-# Depends on jq https://stedolan.github.io/jq/
+# Depends on jq (https://stedolan.github.io/jq/) and curl
 
 usage() {
   cat >&2 << EOH
@@ -63,6 +63,17 @@ jqFilter() {
 jqFilterCompact() {
   jqFilter "$1" "$2" -c
 }
+
+for cmd in "jq" "curl"
+do
+  command -v $cmd >/dev/null
+
+  if [ $? -eq 1 ]
+  then
+    echoError "The '$cmd' command is required. Please install it first."
+    exit 1
+  fi
+done
 
 listAssets=false
 listReleases=false
