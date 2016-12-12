@@ -8,7 +8,7 @@ A release in Github is an overloaded term. Github calls every git tag in a repos
 
 ## Install
 
-Clone this repository and either add `ghradl/bin` to your path or call the script directly to use it.
+Clone this repository and either add `ghradl/bin` to your path or call the `ghradl` script directly to use it.
 
 ## Dependencies
 
@@ -87,3 +87,7 @@ electron-v1.4.12-linux-armv7l.zip         electron-v1.4.12-linux-x64.zip
 ```
 
 See `ghradl -h` for more options.
+
+## My Use Case
+
+I keep [GPMDP](https://github.com/MarshallOfSound/Google-Play-Music-Desktop-Player-UNOFFICIAL-) updated on Ubuntu with [ghradl and another install script](https://github.com/samiconductor/ghradl-use-case).
