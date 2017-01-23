@@ -18,7 +18,7 @@ make install
 
 ## Dependencies
 
-- [jq](https://stedolan.github.io/jq/)
+- [jq](https://stedolan.github.io/jq/) - version 1.5
 - curl
 
 ## Usage Examples
